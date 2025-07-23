@@ -1,6 +1,14 @@
+/**
+ * @typedef {import("@girs/gjs")}
+ * @typedef {import("@girs/gjs/dom")}
+ * @typedef {import("@girs/gnome-shell/ambient")}
+ * @typedef {import("@girs/gnome-shell/extensions/global")}
+ */
+
 import Clutter from "gi://Clutter";
 import GObject from "gi://GObject";
 import Gio from "gi://Gio";
+import GLib from "gi://GLib";
 import St from "gi://St";
 
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
@@ -22,12 +30,13 @@ export const AppButton = GObject.registerClass(
                 child: new St.Icon({
                     gicon: icons.app,
                 }),
-                accessible_name: _("Open Quick Share app"),
+                accessible_name: _("Open Packet app"),
             });
 
             this.connect("clicked", () => {
-                // tailscale.exit_node = "";
-                // this.reactive = false;
+                GLib.spawn_command_line_async(
+                    "flatpak run io.github.nozwock.Packet",
+                );
             });
         }
     },
