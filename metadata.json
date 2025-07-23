@@ -1,0 +1,8 @@
+{
+  "name": "Packet Quick Share",
+  "description": "Allow sharing files between devices via Quick Share through Packet",
+  "uuid": "packet-quick-share@aruarian.dance",
+  "shell-version": [
+    "48"
+  ]
+}

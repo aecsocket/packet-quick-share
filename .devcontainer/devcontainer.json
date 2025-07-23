@@ -1,0 +1,23 @@
+{
+  "name": "packet-gnome-extension",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "packet-gnome-extension-profile",
+      "target": "/home/vscode"
+    },
+    {
+      "type": "volume",
+      "source": "nix",
+      "target": "/nix"
+    },
+    {
+      "type": "bind",
+      "source": "${localEnv:HOME}/.local/share/gnome-shell/extensions/",
+      "target": "/home/vscode/.local/share/gnome-shell/extensions/"
+    }
+  ]
+}
