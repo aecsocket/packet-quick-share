@@ -14,106 +14,220 @@ import St from "gi://St";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 
 import {
-    Extension,
-    gettext as _,
+  Extension,
+  gettext as _,
 } from "resource:///org/gnome/shell/extensions/extension.js";
 import * as QuickSettings from "resource:///org/gnome/shell/ui/quickSettings.js";
 
-let icons = {};
+// const APP_ID = "io.github.nozwock.Packet";
+const APP_ID = "io.github.nozwock.Packet.Devel";
 
-export const AppButton = GObject.registerClass(
-    class AppButton extends St.Button {
-        constructor() {
-            super({
-                style_class: "icon-button",
-                can_focus: true,
-                child: new St.Icon({
-                    gicon: icons.app,
-                }),
-                accessible_name: _("Open Packet app"),
-            });
+// const BUS_NAME = "io.github.nozwock.Packet.Api";
+const BUS_NAME = "io.github.nozwock.Packet.Devel.Api";
 
-            this.connect("clicked", () => {
-                GLib.spawn_command_line_async(
-                    "flatpak run io.github.nozwock.Packet",
-                );
-            });
-        }
-    },
-);
-
-const QuickShareToggle = GObject.registerClass(
-    class QuickShareToggle extends QuickSettings.QuickMenuToggle {
-        constructor() {
-            super({
-                title: _("Quick Share"),
-                gicon: icons.quickShare,
-                toggleMode: true,
-                menuEnabled: true,
-            });
-
-            const actionLayout = new Clutter.GridLayout();
-            const actionBar = new St.Widget({
-                layout_manager: actionLayout,
-            });
-
-            this.menu._headerSpacer.x_align = Clutter.ActorAlign.END;
-            this.menu._headerSpacer.add_child(actionBar);
-
-            const settingsButton = new AppButton();
-            actionLayout.attach(settingsButton, 0, 0, 1, 1);
-
-            this.connect("notify::checked", () => this.updateHeader());
-            this.updateHeader();
-        }
-
-        updateHeader() {
-            const subtitle = this.checked
-                ? _("Visible and ready to receive")
-                : _("Not visible to other devices");
-            this.menu.setHeader(this.gicon, this.title, subtitle);
-        }
-    },
-);
-
-const QuickShareIndicator = GObject.registerClass(
-    class QuickShareIndicator extends QuickSettings.SystemIndicator {
-        constructor() {
-            super();
-
-            this._indicator = this._addIndicator();
-            this._indicator.gicon = icons.quickShare;
-
-            const toggle = new QuickShareToggle();
-            toggle.bind_property(
-                "checked",
-                this._indicator,
-                "visible",
-                GObject.BindingFlags.SYNC_CREATE,
-            );
-            this.quickSettingsItems.push(toggle);
-        }
-    },
-);
+// const OBJECT_NAME = "/io/github/nozwock/Packet";
+const OBJECT_NAME = "/io/github/nozwock/Packet/Devel";
 
 export default class QuickShareExtension extends Extension {
-    enable() {
-        icons.quickShare = Gio.icon_new_for_string(
-            `${this.path}/assets/quick-share-symbolic.svg`,
-        );
-        icons.app = Gio.icon_new_for_string(
-            `${this.path}/assets/io.github.nozwock.Packet-symbolic.svg`,
-        );
+  /** @type {QuickShareIndicator} */
+  _indicator;
 
-        this._indicator = new QuickShareIndicator();
-        Main.panel.statusArea.quickSettings.addExternalIndicator(
-            this._indicator,
-        );
+  enable() {
+    if (!GLib.spawn_command_line_sync(`flatpak info ${APP_ID}`)) {
+      Main.notifyError(
+        _("Quick Share unavailable"),
+        _("Packet app must be installed for Quick Share to function"),
+      );
     }
 
-    disable() {
-        icons = {};
-        this._indicator.quickSettingsItems.forEach((item) => item.destroy());
-        this._indicator.destroy();
-    }
+    const assets = makeAssets(this.path);
+    const indicator = new QuickShareIndicator(assets);
+
+    const toggle = new QuickShareToggle(assets);
+    toggle.bind_property(
+      "checked",
+      indicator.icon,
+      "visible",
+      GObject.BindingFlags.SYNC_CREATE,
+    );
+    indicator.quickSettingsItems.push(toggle);
+
+    Main.panel.statusArea.quickSettings.addExternalIndicator(indicator);
+
+    GLib.spawn_command_line_async(`flatpak run ${APP_ID} --background`);
+    PacketProxy(Gio.DBus.session, BUS_NAME, OBJECT_NAME, (proxy, err) => {
+      if (err != null) {
+        Main.notifyError(
+          _("Quick Share unavailable"),
+          _(`Failed to start DBus proxy: ${err}`),
+        );
+        return;
+      }
+
+      /** @type {PacketApi} */
+      const packetApi = proxy;
+      toggle.setPacketApi(packetApi);
+    });
+
+    this._indicator = indicator;
+  }
+
+  disable() {
+    this._indicator.quickSettingsItems.forEach((item) => item.destroy());
+    this._indicator.destroy();
+    this._indicator = null;
+  }
 }
+
+/**
+ * @typedef {Object} Assets
+ * @property {Gio.Icon} quickShare
+ * @property {Gio.Icon} settings
+ */
+
+/**
+ * @param {string} path
+ * @returns {Assets}
+ */
+function makeAssets(path) {
+  const icon = (name) =>
+    Gio.icon_new_for_string(`${path}/assets/${name}-symbolic.svg`);
+  return {
+    quickShare: icon("quick-share"),
+    settings: icon("settings"),
+  };
+}
+
+const IFACE = `
+<node>
+  <interface name="io.github.nozwock.Packet1">
+    <property name="DeviceName" type="s" access="read"/>
+    <property name="DeviceVisibility" type="b" access="readwrite"/>
+  </interface>
+</node>
+`;
+
+/**
+ * @typedef {Object} PacketApi
+ * @property {string} DeviceName
+ * @property {boolean} DeviceVisibility
+ */
+export const PacketProxy = Gio.DBusProxy.makeProxyWrapper(IFACE);
+
+export const QuickShareToggle = GObject.registerClass(
+  class QuickShareToggle extends QuickSettings.QuickMenuToggle {
+    /** @type {PacketApi} */
+    _packetApi;
+
+    /**
+     * @param {Assets} assets
+     */
+    constructor(assets) {
+      super({
+        title: _("Quick Share"),
+        gicon: assets.quickShare,
+        toggleMode: true,
+        menuEnabled: true,
+      });
+
+      const actionLayout = new Clutter.GridLayout();
+      const actionBar = new St.Widget({
+        layout_manager: actionLayout,
+      });
+
+      this.menu._headerSpacer.x_align = Clutter.ActorAlign.END;
+      this.menu._headerSpacer.add_child(actionBar);
+
+      const appButton = new AppButton(assets);
+      actionLayout.attach(appButton, 0, 0, 1, 1);
+
+      this._updateHeader();
+    }
+
+    _updateHeader() {
+      /** @type {boolean} */
+      let checked;
+      /** @type {string} */
+      let subtitle;
+      /** @type {string} */
+      let headerSubtitle;
+
+      if (this._packetApi) {
+        if (this._packetApi.DeviceVisibility) {
+          const deviceName = this._packetApi.DeviceName;
+          checked = true;
+          subtitle = deviceName;
+          headerSubtitle = `Visible as “${deviceName}”`;
+        } else {
+          checked = false;
+          subtitle = null;
+          headerSubtitle = _("Not visible to other devices");
+        }
+      } else {
+        subtitle = null;
+        headerSubtitle = _("Packet not running");
+      }
+
+      this.checked = checked;
+      this.subtitle = subtitle;
+      this.menu.setHeader(this.gicon, this.title, headerSubtitle);
+    }
+
+    /**
+     * @param {PacketApi} packetApi
+     */
+    setPacketApi(packetApi) {
+      this._packetApi = packetApi;
+
+      this._packetApi.connect(
+        "g-properties-changed",
+        (_proxy, _changed, _invalidated) => {
+          this._updateHeader();
+        },
+      );
+      this.connect("notify::checked", (_self, _a) => {
+        this._packetApi.DeviceVisibility = this.checked;
+      });
+      this._updateHeader();
+    }
+  },
+);
+
+export const AppButton = GObject.registerClass(
+  class AppButton extends St.Button {
+    /**
+     * @param {Assets} assets
+     */
+    constructor(assets) {
+      super({
+        style_class: "icon-button",
+        can_focus: true,
+        child: new St.Icon({
+          gicon: assets.settings,
+        }),
+        accessible_name: _("Open settings"),
+      });
+
+      this.connect("clicked", () => {
+        GLib.spawn_command_line_async(`flatpak run ${APP_ID}`);
+      });
+    }
+  },
+);
+
+export const QuickShareIndicator = GObject.registerClass(
+  class QuickShareIndicator extends QuickSettings.SystemIndicator {
+    /** @type {St.Icon} */
+    icon;
+
+    /**
+     * @param {Assets} assets
+     */
+    constructor(assets) {
+      super();
+
+      this.icon = this._addIndicator();
+      this.icon.gicon = assets.quickShare;
+    }
+  },
+);
